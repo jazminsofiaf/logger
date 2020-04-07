@@ -1,17 +1,26 @@
 
-use std::io::{LineWriter, stderr, Write};
+use std::io::{LineWriter, stderr,stdout, Write};
 use std::fs::OpenOptions;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use lazy_static::lazy_static;
+
 
 struct MyLogger {
-    out_stream: Mutex<Box<dyn Write + Send>>
+    out_stream: Box<dyn Write + Send>
 }
 
 
 impl MyLogger {
-    fn init(outfile: &str) -> Arc<MyLogger> {
+    fn new() -> MyLogger {
+        let default_logger = MyLogger {
+            out_stream:  Box::new(LineWriter::new(stdout())) as Box<dyn Write + Send>
+        };
+        return  default_logger;
+    }
+
+    fn set_output_file(&mut self, outfile: &str) {
         let logfile = match OpenOptions::new().create(true).truncate(true).write(true).open(outfile) {
             Ok(f)  => Box::new(LineWriter::new(f)) as Box<dyn Write + Send>,
             Err(e) => {
@@ -20,35 +29,40 @@ impl MyLogger {
             }
         };
 
-
-         let logger = MyLogger {
-                out_stream: Mutex::new(logfile)
-         };
-         return  std::sync::Arc::new(logger);
+        self.out_stream = logfile;
     }
 
-    fn log(& self, msg: &str) {
-        let mut guard = self.out_stream.lock().unwrap();
-        guard.write_all(msg.as_ref()).expect("error at logging");
+    fn log(&mut self, msg: &str) {
+        self.out_stream.write_all(msg.as_ref()).expect("error at logging");
     }
 }
 
+lazy_static! {
+    static ref GLOBAL_LOGGER : Mutex<MyLogger> = Mutex::new(MyLogger::new());
+}
+
 fn main() {
-    let logger = &mut MyLogger::init("file_name.txt");
+
+    let mut guard = GLOBAL_LOGGER.lock().unwrap();
+    guard.set_output_file("file_name.txt");
+    drop(guard);
 
     let handle;
     {
-        let logger = logger.clone();
         handle = thread::spawn(move || {
             for i in 1..5 {
-                logger.log(format!("hi number {} from the spawned thread!\n", i).as_str());
+                let mut guard = GLOBAL_LOGGER.lock().unwrap();
+                guard.log(format!("hi number {} from the spawned thread!\n", i).as_str());
+                drop(guard);
                 thread::sleep(Duration::from_millis(1));
             }
         });
     }
 
     for i in 1..5 {
-        logger.log(format!("hi number {} from the main thread!\n", i).as_str());
+        let mut guard = GLOBAL_LOGGER.lock().unwrap();
+        guard.log(format!("hi number {} from the main thread!\n", i).as_str());
+        drop(guard);
         thread::sleep(Duration::from_millis(1));
     }
 
